@@ -7,10 +7,11 @@ from __future__ import (
 
 from threading import Lock
 from itertools import repeat, cycle, chain
+from time import sleep
 
 from .exc import OutputDeviceBadValue, GPIOPinMissing
 from .devices import GPIODevice, Device, CompositeDevice
-from .mixins import SourceMixin
+from .mixins import SourceMixin, ValuesMixin
 from .threads import GPIOThread
 
 
@@ -1265,3 +1266,136 @@ class AngularServo(Servo):
                 ((value - self._min_angle) / self._angular_range) +
                 self._min_value)
 
+class StepperMotor(ValuesMixin, GPIOBase):
+    """
+    Extends :class:`GPIOBase` and represents a stepper motor.  Stepper motors 
+    have many teeth connected to many coils that are electro-magnetized to 
+    turn a motor with great precision.  
+
+    Connect a positive/negative to the stepper motor / driver, along with 
+    the other pins. 
+
+    Consult the datasheet for your specific stepper motor for the exact 
+    values of the following:
+        - Steps per revolution
+        - Get Ratio
+
+    The above are defaulted to 32 steps per revolution and 64 for the gear 
+    ratio (1/64 gearing) with a 4 pin configuration. This is based on the 
+    popular 28BYJ-48 ULN2003 5V Stepper Motor + Driver Board:
+        https://www.amazon.com/gp/product/B01CP18J4A/ref=oh_aui_detailpage_o01_s00?ie=UTF8&psc=1
+
+    The majority of this class is based on the following tutorial: 
+        https://www.youtube.com/watch?v=Dc16mKFA7Fo
+
+    There are different drive types for turning the motor:
+
+    Wave Drive (AKA Single Stepping)
+        This turns the motor by magnetizing one coil at a time.
+               |Step 1 | Step 2 | Step 3 | Step 4
+        -------------------------------------------
+        Pin 1  |   1   |   0    |   0    |   0
+        Pin 2  |   0   |   1    |   0    |   0
+        Pin 3  |   0   |   0    |   1    |   0
+        Pin 4  |   0   |   0    |   0    |   1
+
+    Full Step Drive (AKA Full Stepping)
+        2 coils are on at the same time.
+        This approach requires more current, but results in a greater turning force.
+               |Step 1 | Step 2 | Step 3 | Step 4
+        -------------------------------------------
+        Pin 1  |   1   |   0    |   0    |   1
+        Pin 2  |   1   |   1    |   0    |   0
+        Pin 3  |   0   |   1    |   1    |   0
+        Pin 4  |   0   |   0    |   1    |   1
+
+    Half Step Drive (AKA Half Stepping)
+        This is a combination of single and double stepping.
+        This effectively doubles the resolution of the stepper motor, giving you more precision.
+        This only has about 70% of the turning force as full-stepping.
+        While counter-intuitive, in practice this typically turns the motor at a higher speed
+               |Step 1 | Step 2 | Step 3 | Step 4 | Step 5 | Step 6 | Step 7 | Step 8 
+        ------------------------------------------------------------------------------
+        Pin 1  |   1   |   1    |   0    |   0    |   0    |    0   |   0    |   1
+        Pin 2  |   0   |   1    |   1    |   1    |   0    |    0   |   0    |   0
+        Pin 3  |   0   |   0    |   0    |   1    |   1    |    1   |   0    |   0
+        Pin 4  |   0   |   0    |   0    |   0    |   0    |    1   |   1    |   1
+
+    Microstepping is currently not implemented, and is known to have lower accuracy than the
+    above methods.
+
+    You can create a StepperMotor and turn it using any of the strategies:
+    
+        >>> from gpiozero import StepperMotor
+        >>> s = StepperMotor([4, 17, 27, 22], 32, 64)
+        >>> s.half_step(1.26) # rotate the motor 1.26 revolutions using a half step drive
+        >>> s.half_step(-0.75) # rotate the motor 3/4 of a revolution in the opposite direction
+        >>> # Other drive strategies
+        >>> s.full_step(1.75) 
+        >>> s.single_step(1.75)
+
+    :param list of int pins:
+        The GPIO pins that control the stepper motor. See :ref:`pin-numbering`
+        for valid pin numbers.
+
+    :param int steps_per_rev:
+        The number of steps required to complete a full rotation of the motor.
+        This number is the same as the total number of teeth in the motor.
+
+    :param int gear_ratio:
+        Most stepper motors are geared down.  This is the denominator of the gear ratio. 
+        For example, a 1/64 gearing would be 64.  This information should be in the stepper
+        motor's datasheet.
+
+    """
+    __default_ms_between_steps = 0.001
+
+    def __init__(self, pins=None, steps_per_rev=32, gear_ratio=64):
+        if pins is None or isinstance(pins, list) or len(pins) == 0:
+            raise ValueError('Pins must be an array.')
+
+        # Set the pins that we will be using
+        for pin in pins:
+            self.__pins.append(OutputDevice(pin))
+
+        self.__steps_per_rev = steps_per_rev
+        self.__steps_per_cycle = len(self.__pins)
+        self.__cycles_per_rev = (self.__steps_per_rev / self.__steps_per_cycle) * gear_ratio
+        self.__ms_between_steps = ms_between_steps
+
+        super(StepperMotor, self).__init__()
+
+    def half_step(self, revolutions, ms_between_steps = None):
+        """
+        Turns the servo a specified number of rotations. 
+        """
+        # Determine the total cycles required for a full rotation
+        num_cycles = revolutions * self.__cycles_per_rev
+
+        wait = ms_between_steps if ms_between_steps != None else self.__default_ms_between_steps
+
+        # Note that each array is a verticle slice of the above table
+        seq = [
+            [1, 0, 0, 0],
+            [1, 1, 0, 0],
+            [0, 1, 0, 0],
+            [0, 1, 1, 0],
+            [0, 0, 1, 0],
+            [0, 0, 1, 1],
+            [0, 0, 0, 1],
+            [1, 0, 0, 1]
+        ]
+
+        for i in range(num_cycles):
+            # There are 8 half steps in the sequence
+            for half_step in range(8):
+                for pin in range(len(self.__pins)):
+                    xpin = self.__pins[pin]
+                    # Set the pin on/off
+                    if seq[half_step][pin] != 0:
+                        xpin.on()
+                    else:
+                        xpin.off()
+                # If you run this without a wait, it will run too quickly for the 
+                # motor to actually turn.
+                sleep(self.__ms_between_steps)
