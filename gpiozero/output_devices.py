@@ -1350,18 +1350,16 @@ class StepperMotor(ValuesMixin, GPIOBase):
     """
     __default_seconds_between_steps = 0.001
 
-    def __init__(self, pins=None, steps_per_rev=32, gear_ratio=64):
-        if pins is None or isinstance(pins, list) or len(pins) == 0:
-            raise ValueError('Pins must be an array.')
-
+    def __init__(self, *args, **kwargs):
         # Set the pins that we will be using
-        for pin in pins:
+        for pin in args:
             self.__pins.append(OutputDevice(pin))
 
-        self.__steps_per_rev = steps_per_rev
-        self.__steps_per_cycle = len(self.__pins)
-        self.__cycles_per_rev = (self.__steps_per_rev / self.__steps_per_cycle) * gear_ratio
+        self.__steps_per_rev = kwargs.pop('steps_per_rev', 32)
+        self.__gear_ratio = kwargs.pop('gear_ratio', 64)
 
+        self.__steps_per_cycle = len(self.__pins)
+        self.__cycles_per_rev = (self.__steps_per_rev / self.__steps_per_cycle) * self.__gear_ratio
         super(StepperMotor, self).__init__()
 
     def close(self):
