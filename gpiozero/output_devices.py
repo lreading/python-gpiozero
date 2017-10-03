@@ -10,7 +10,7 @@ from itertools import repeat, cycle, chain
 from time import sleep
 
 from .exc import OutputDeviceBadValue, GPIOPinMissing
-from .devices import GPIODevice, Device, CompositeDevice
+from .devices import GPIODevice, Device, CompositeDevice, GPIOBase
 from .mixins import SourceMixin, ValuesMixin
 from .threads import GPIOThread
 
@@ -1268,24 +1268,24 @@ class AngularServo(Servo):
 
 class StepperMotor(ValuesMixin, GPIOBase):
     """
-    Extends :class:`GPIOBase` and represents a stepper motor.  Stepper motors 
-    have many teeth connected to many coils that are electro-magnetized to 
-    turn a motor with great precision.  
+    Extends :class:`GPIOBase` and represents a stepper motor.  Stepper motors
+    have many teeth connected to many coils that are electro-magnetized to
+    turn a motor with great precision.
 
-    Connect a positive/negative to the stepper motor / driver, along with 
-    the other pins. 
+    Connect a positive/negative to the stepper motor / driver, along with
+    the other pins.
 
-    Consult the datasheet for your specific stepper motor for the exact 
+    Consult the datasheet for your specific stepper motor for the exact
     values of the following:
         - Steps per revolution
         - Get Ratio
 
-    The above are defaulted to 32 steps per revolution and 64 for the gear 
-    ratio (1/64 gearing) with a 4 pin configuration. This is based on the 
+    The above are defaulted to 32 steps per revolution and 64 for the gear
+    ratio (1/64 gearing) with a 4 pin configuration. This is based on the
     popular 28BYJ-48 ULN2003 5V Stepper Motor + Driver Board:
         https://www.amazon.com/gp/product/B01CP18J4A/ref=oh_aui_detailpage_o01_s00?ie=UTF8&psc=1
 
-    The majority of this class is based on the following tutorial: 
+    The majority of this class is based on the following tutorial:
         https://www.youtube.com/watch?v=Dc16mKFA7Fo
 
     There are different drive types for turning the motor:
@@ -1314,7 +1314,7 @@ class StepperMotor(ValuesMixin, GPIOBase):
         This effectively doubles the resolution of the stepper motor, giving you more precision.
         This only has about 70% of the turning force as full-stepping.
         While counter-intuitive, in practice this typically turns the motor at a higher speed
-               |Step 1 | Step 2 | Step 3 | Step 4 | Step 5 | Step 6 | Step 7 | Step 8 
+               |Step 1 | Step 2 | Step 3 | Step 4 | Step 5 | Step 6 | Step 7 | Step 8
         ------------------------------------------------------------------------------
         Pin 1  |   1   |   1    |   0    |   0    |   0    |    0   |   0    |   1
         Pin 2  |   0   |   1    |   1    |   1    |   0    |    0   |   0    |   0
@@ -1325,13 +1325,13 @@ class StepperMotor(ValuesMixin, GPIOBase):
     above methods.
 
     You can create a StepperMotor and turn it using any of the strategies:
-    
+
         >>> from gpiozero import StepperMotor
         >>> s = StepperMotor([4, 17, 27, 22], 32, 64)
         >>> s.half_step(1.26) # rotate the motor 1.26 revolutions using a half step drive
         >>> s.half_step(-0.75) # rotate the motor 3/4 of a revolution in the opposite direction
         >>> # Other drive strategies
-        >>> s.full_step(1.75) 
+        >>> s.full_step(1.75)
         >>> s.single_step(1.75)
 
     :param list of int pins:
@@ -1343,12 +1343,12 @@ class StepperMotor(ValuesMixin, GPIOBase):
         This number is the same as the total number of teeth in the motor.
 
     :param int gear_ratio:
-        Most stepper motors are geared down.  This is the denominator of the gear ratio. 
+        Most stepper motors are geared down.  This is the denominator of the gear ratio.
         For example, a 1/64 gearing would be 64.  This information should be in the stepper
         motor's datasheet.
 
     """
-    __default_ms_between_steps = 0.001
+    __default_seconds_between_steps = 0.001
 
     def __init__(self, pins=None, steps_per_rev=32, gear_ratio=64):
         if pins is None or isinstance(pins, list) or len(pins) == 0:
@@ -1361,18 +1361,40 @@ class StepperMotor(ValuesMixin, GPIOBase):
         self.__steps_per_rev = steps_per_rev
         self.__steps_per_cycle = len(self.__pins)
         self.__cycles_per_rev = (self.__steps_per_rev / self.__steps_per_cycle) * gear_ratio
-        self.__ms_between_steps = ms_between_steps
 
         super(StepperMotor, self).__init__()
 
-    def half_step(self, revolutions, ms_between_steps = None):
+    def close(self):
+        for pin in self.__pins:
+            pin.off()
+            pin.close()
+        del self.__pins[:]
+        super(StepperMotor, self).close()
+
+    @property
+    def closed(self):
+        return len(self.__pins) == 0
+
+    def half_step(self, revolutions, seconds_between_steps=None):
         """
-        Turns the servo a specified number of rotations. 
+        Turns the servo a specified number of rotations.
+
+        :param float revolutions:
+            The total number of revolutions the motor will turn
+
+        :param float seconds_between_steps:
+            The wait tile for seconds between steps.
+            Defaults to 0.001
         """
         # Determine the total cycles required for a full rotation
         num_cycles = revolutions * self.__cycles_per_rev
 
-        wait = ms_between_steps if ms_between_steps != None else self.__default_ms_between_steps
+        # You must wait between steps when turning on/off coils
+        # otherwise this cycles too quickly to turn the motor.
+        if seconds_between_steps != None:
+            wait = seconds_between_steps
+        else:
+            wait = self.__default_seconds_between_steps
 
         # Note that each array is a verticle slice of the above table
         seq = [
@@ -1386,7 +1408,7 @@ class StepperMotor(ValuesMixin, GPIOBase):
             [1, 0, 0, 1]
         ]
 
-        for i in range(num_cycles):
+        for _ in range(num_cycles):
             # There are 8 half steps in the sequence
             for half_step in range(8):
                 for pin in range(len(self.__pins)):
@@ -1396,6 +1418,5 @@ class StepperMotor(ValuesMixin, GPIOBase):
                         xpin.on()
                     else:
                         xpin.off()
-                # If you run this without a wait, it will run too quickly for the 
-                # motor to actually turn.
-                sleep(self.__ms_between_steps)
+                # Wait long enough to allow the motor to turn
+                sleep(wait)
