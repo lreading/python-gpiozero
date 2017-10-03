@@ -1375,7 +1375,7 @@ class StepperMotor(ValuesMixin, GPIOBase):
 
     def half_step(self, revolutions, seconds_between_steps=None):
         """
-        Turns the servo a specified number of rotations.
+        Turns the servo a specified number of rotations using the half step driver.
 
         :param float revolutions:
             The total number of revolutions the motor will turn
@@ -1418,3 +1418,31 @@ class StepperMotor(ValuesMixin, GPIOBase):
                         xpin.off()
                 # Wait long enough to allow the motor to turn
                 sleep(wait)
+
+    def full_step(self, revolutions, seconds_between_steps=None):
+        """
+        Turns the servo a specified number of rotations using the full step driver.
+
+        :param float revolutions:
+            The total number of revolutions the motor will turn
+
+        :param float seconds_between_steps:
+            The wait tile for seconds between steps.
+            Defaults to 0.001
+        """
+        # TODO
+        pass
+
+    def single_step(self, revolutions, seconds_between_steps=None):
+        """
+        Turns the servo a specified number of rotations using the single step driver.
+
+        :param float revolutions:
+            The total number of revolutions the motor will turn
+
+        :param float seconds_between_steps:
+            The wait tile for seconds between steps.
+            Defaults to 0.001
+        """
+        # TODO
+        pass
