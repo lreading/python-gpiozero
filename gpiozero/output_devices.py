@@ -1334,7 +1334,7 @@ class StepperMotor(ValuesMixin, GPIOBase):
         >>> s.full_step(1.75)
         >>> s.single_step(1.75)
 
-    :param list of int pins:
+    :param int \*pins:
         The GPIO pins that control the stepper motor. See :ref:`pin-numbering`
         for valid pin numbers.
 
